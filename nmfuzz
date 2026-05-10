@@ -1,0 +1,658 @@
+#!/usr/bin/bash
+# =============================================================================
+#  nmfuzz — CTF Lab Enumeration Automation
+#  Usage:  nmfuzz <command> [options]
+#  Author: jNavarroO9
+# =============================================================================
+
+# ─── Colors ──────────────────────────────────────────────────────────────────
+RED=$'\033[0;31m'
+GREEN=$'\033[0;32m'
+YELLOW=$'\033[1;33m'
+CYAN=$'\033[0;36m'
+BLUE=$'\033[0;34m'
+MAGENTA=$'\033[0;35m'
+BOLD=$'\033[1m'
+NC=$'\033[0m'
+
+# ─── Paths and default config ────────────────────────────────────────────────
+CONFIG_FILE="$HOME/.nmfuzz.conf"
+DEFAULT_WORDLIST_DIR="/usr/share/wordlists"
+DEFAULT_DIR_WORDLIST="${DEFAULT_WORDLIST_DIR}/dirbuster/directory-list-2.3-medium.txt"
+DEFAULT_SUB_WORDLIST="${DEFAULT_WORDLIST_DIR}/SecLists/Discovery/DNS/subdomains-top1million-5000.txt"
+NMAP_MIN_RATE=5000
+
+# ─── Helpers ─────────────────────────────────────────────────────────────────
+banner() {
+    echo -e "${CYAN}${BOLD}"
+    cat << 'EOF'
+  ███╗   ██╗███╗   ███╗███████╗██╗   ██╗███████╗███████╗
+  ████╗  ██║████╗ ████║██╔════╝██║   ██║╚════██║╚════██║
+  ██╔██╗ ██║██╔████╔██║█████╗  ██║   ██║    ██╔╝    ██╔╝
+  ██║╚██╗██║██║╚██╔╝██║██╔══╝  ██║   ██║   ██╔╝    ██╔╝ 
+  ██║ ╚████║██║ ╚═╝ ██║██║     ╚██████╔╝██████╔╝██████╔╝
+  ╚═╝  ╚═══╝╚═╝     ╚═╝╚═╝      ╚═════╝╚═════╝ ╚═════╝ 
+EOF
+    echo -e "${NC}${MAGENTA}          CTF Lab Enumeration Automation Tool${NC}"
+    echo -e "${BLUE}──────────────────────────────────────────────────────────${NC}\n"
+}
+
+info()    { echo -e "${CYAN}[*]${NC} $*"; }
+success() { echo -e "${GREEN}[+]${NC} $*"; }
+warn()    { echo -e "${YELLOW}[!]${NC} $*"; }
+error()   { echo -e "${RED}[-]${NC} $*" >&2; }
+section() { echo -e "\n${BOLD}${BLUE}══ $* ${NC}"; }
+
+timestamp() { date '+%Y-%m-%d %H:%M:%S'; }
+
+die() {
+    error "$*"
+    exit 1
+}
+
+require_tool() {
+    local tool="$1"
+    command -v "$tool" &>/dev/null || die "Required tool not found: ${BOLD}${tool}${NC}"
+}
+
+require_root() {
+    [[ $EUID -eq 0 ]] || die "This command requires root privileges (nmap SYN scan)"
+}
+
+# ─── Config: save/load target ────────────────────────────────────────────────
+save_config() {
+    local ip="$1" name="$2"
+    cat > "$CONFIG_FILE" <<EOF
+TARGET_IP=${ip}
+TARGET_NAME=${name}
+WORKSPACE=${PWD}/${name}
+EOF
+    success "Target saved to ${CONFIG_FILE}"
+}
+
+load_config() {
+    if [[ -f "$CONFIG_FILE" ]]; then
+        # shellcheck source=/dev/null
+        source "$CONFIG_FILE"
+    fi
+}
+
+# ─── Target resolution (arg or config) ───────────────────────────────────────
+resolve_target() {
+    # Accepts --target ip name as parameters, or loads from config
+    local ip_arg="$1" name_arg="$2"
+    if [[ -n "$ip_arg" && -n "$name_arg" ]]; then
+        TARGET_IP="$ip_arg"
+        TARGET_NAME="$name_arg"
+        WORKSPACE="${PWD}/${TARGET_NAME}"
+    else
+        load_config
+        [[ -z "$TARGET_IP" || -z "$TARGET_NAME" ]] && \
+            die "No target specified. Run 'settarget <ip> <name>' first, or pass --target <ip> <name>"
+    fi
+}
+
+# ─── Command: settarget ───────────────────────────────────────────────────────
+cmd_settarget() {
+    local ip="$1" name="$2"
+    [[ -z "$ip" || -z "$name" ]]  && die "Usage: nmfuzz settarget <ip> <machine-name>"
+
+    # Basic IP validation
+    if ! echo "$ip" | grep -qP '^\d{1,3}(\.\d{1,3}){3}$'; then
+        warn "IP '$ip' does not look valid, continuing anyway..."
+    fi
+
+    section "Setting up target"
+    info "IP        : ${BOLD}${ip}${NC}"
+    info "Machine   : ${BOLD}${name}${NC}"
+
+    # Create directory structure
+    local ws="${PWD}/${name}"
+    mkdir -p "${ws}/nmap" "${ws}/content" "${ws}/exploits"
+    success "Structure created at: ${BOLD}${ws}${NC}"
+    info "  ├── nmap/      (scan results)"
+    info "  ├── content/   (web enumeration, screenshots, etc.)"
+    info "  └── exploits/  (exploits and payloads)"
+
+    save_config "$ip" "$name"
+}
+
+# ─── Parse open ports from allPorts (grepable format) ─────────────────────────
+extract_ports() {
+    local allports_file="$1"
+    grep -oP '\d+/open' "$allports_file" | cut -d'/' -f1 | sort -un | tr '\n' ',' | sed 's/,$//'
+}
+
+# ─── Command: portscan ────────────────────────────────────────────────────────
+cmd_portscan() {
+    local do_udp=false wordlist_arg=""
+    local ip_arg="" name_arg=""
+
+    # Parse options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --target)    ip_arg="$2"; name_arg="$3"; shift 3 ;;
+            --udp)       do_udp=true; shift ;;
+            *)           shift ;;
+        esac
+    done
+
+    require_root
+    require_tool nmap
+    resolve_target "$ip_arg" "$name_arg"
+
+    local nmap_dir="${WORKSPACE}/nmap"
+    mkdir -p "$nmap_dir"
+
+    # ── Phase 1: Full SYN scan ────────────────────────────────────────────────
+    section "Phase 1 — SYN Scan (all ports)"
+    local allports="${nmap_dir}/allPorts"
+    info "Target    : ${TARGET_IP} (${TARGET_NAME})"
+    info "Output    : ${allports}.gnmap"
+    info "Started   : $(timestamp)"
+
+    nmap -sS -p- \
+        --min-rate "${NMAP_MIN_RATE}" \
+        -n -Pn \
+        -oG "${allports}" \
+        "${TARGET_IP}" 2>&1
+
+    local nmap_exit=$?
+    if [[ $nmap_exit -ne 0 ]]; then
+        error "SYN scan failed (exit code: ${nmap_exit})"
+        error "Aborting enumeration."
+        return 1
+    fi
+
+    # Check that open ports were found
+    local open_ports
+    open_ports=$(extract_ports "${allports}")
+    if [[ -z "$open_ports" ]]; then
+        warn "No open ports found on ${TARGET_IP}."
+        warn "Check the IP and make sure the host is up."
+        return 1
+    fi
+
+    success "Open ports: ${BOLD}${open_ports}${NC}"
+
+    # ── Phase 2: Version and script scan ─────────────────────────────────────
+    section "Phase 2 — Version detection and recon scripts (-sCV)"
+    local targeted="${nmap_dir}/targeted"
+    info "Ports     : ${open_ports}"
+    info "Output    : ${targeted}.nmap"
+    info "Started   : $(timestamp)"
+
+    nmap -sCV \
+        -p "${open_ports}" \
+        -oN "${targeted}" \
+        "${TARGET_IP}" 2>&1
+
+    nmap_exit=$?
+    if [[ $nmap_exit -ne 0 ]]; then
+        error "Version/script scan failed (exit code: ${nmap_exit})"
+        error "Aborting enumeration."
+        return 1
+    fi
+
+    success "Targeted scan complete → ${targeted}"
+
+    # ── Phase 3 (optional): UDP scan ──────────────────────────────────────────
+    if [[ "$do_udp" == true ]]; then
+        section "Phase 3 — UDP Scan (top 200 ports)"
+        local udp_targeted="${nmap_dir}/udp-targeted"
+        info "Output    : ${udp_targeted}.nmap"
+        info "Started   : $(timestamp)"
+        warn "UDP scan may take several minutes..."
+
+        nmap -sU \
+            --top-ports 200 \
+            -oN "${udp_targeted}" \
+            "${TARGET_IP}" 2>&1
+
+        nmap_exit=$?
+        if [[ $nmap_exit -ne 0 ]]; then
+            error "UDP scan failed (exit code: ${nmap_exit})"
+            warn "Continuing without UDP results."
+        else
+            success "UDP scan complete → ${udp_targeted}"
+        fi
+    fi
+
+    success "Port enumeration complete for ${BOLD}${TARGET_NAME}${NC} (${TARGET_IP})"
+    _show_port_summary
+}
+
+# ─── Open port summary after scan ─────────────────────────────────────────────
+_show_port_summary() {
+    local targeted="${WORKSPACE}/nmap/targeted"
+    if [[ -f "$targeted" ]]; then
+        section "Detected services summary"
+        grep -E '^[0-9]+/tcp' "$targeted" | \
+            awk '{printf "  \033[0;32m%-10s\033[0m %-12s %s\n", $1, $3, $4}' || true
+    fi
+}
+
+# ─── HTTP port detection ──────────────────────────────────────────────────────
+detect_http_ports() {
+    local targeted="${WORKSPACE}/nmap/targeted"
+    [[ ! -f "$targeted" ]] && return
+
+    # Look for http, ssl/http, http-alt, etc.
+    grep -E '^[0-9]+/tcp.+(http|www|apache|nginx|iis)' "$targeted" \
+        | grep -v 'filtered\|closed' \
+        | grep -oP '^\d+' || true
+}
+
+# ─── Command: webscan (Gobuster) ──────────────────────────────────────────────
+cmd_webscan() {
+    local ip_arg="" name_arg="" wordlist="" extensions="php,html,txt,js,bak" threads=50
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --target)      ip_arg="$2"; name_arg="$3"; shift 3 ;;
+            --wordlist|-w) wordlist="$2"; shift 2 ;;
+            --ext|-x)      extensions="$2"; shift 2 ;;
+            --threads|-t)  threads="$2"; shift 2 ;;
+            *)             shift ;;
+        esac
+    done
+
+    require_tool gobuster
+    resolve_target "$ip_arg" "$name_arg"
+
+    # Wordlist: argument → default
+    if [[ -z "$wordlist" ]]; then
+        wordlist="$DEFAULT_DIR_WORDLIST"
+    fi
+    [[ ! -f "$wordlist" ]] && die "Wordlist not found: ${wordlist}\nSpecify one with --wordlist <path>"
+
+    # Detect HTTP ports from targeted scan
+    local http_ports
+    http_ports=$(detect_http_ports)
+
+    if [[ -z "$http_ports" ]]; then
+        warn "No HTTP ports detected in previous scan."
+        warn "Falling back to ports 80 and 443..."
+        http_ports="80 443"
+    fi
+
+    section "Web Directory Scan — Gobuster"
+    info "Wordlist  : ${wordlist}"
+    info "Ext.      : ${extensions}"
+    info "Threads   : ${threads}"
+
+    local content_dir="${WORKSPACE}/content"
+    mkdir -p "$content_dir"
+
+    for port in $http_ports; do
+        # Determine scheme
+        local scheme="http"
+        [[ "$port" == "443" || "$port" == "8443" ]] && scheme="https"
+
+        local url="${scheme}://${TARGET_IP}:${port}"
+        local outfile="${content_dir}/gobuster_${port}.txt"
+
+        section "  Scanning → ${url}"
+        info "Output    : ${outfile}"
+        info "Running silently, please wait..."
+
+        # -o writes results to file; stdout/stderr redirected to suppress screen noise.
+        # Do NOT use -q: in some gobuster versions it also suppresses -o file writes.
+        gobuster dir \
+            -u "$url" \
+            -w "$wordlist" \
+            -x "$extensions" \
+            -t "$threads" \
+            -o "$outfile" \
+            > /dev/null 2>&1
+
+        local gb_exit=$?
+        if [[ $gb_exit -ne 0 ]]; then
+            warn "Gobuster failed for ${url} (code: ${gb_exit}) — retrying with domain name..."
+
+            local fallback_domain="${TARGET_NAME}.htb"
+            local fallback_url="${scheme}://${fallback_domain}:${port}"
+            local fallback_outfile="${content_dir}/gobuster_${port}_domain.txt"
+
+            info "  Fallback URL : ${fallback_url}"
+            info "  Output       : ${fallback_outfile}"
+
+            gobuster dir \
+                -u "$fallback_url" \
+                -w "$wordlist" \
+                -x "$extensions" \
+                -t "$threads" \
+                -o "$fallback_outfile" \
+                > /dev/null 2>&1
+
+            local gb_fallback_exit=$?
+            if [[ $gb_fallback_exit -ne 0 ]]; then
+                error "Gobuster also failed for ${fallback_url} (code: ${gb_fallback_exit})"
+            else
+                local found=0
+                found=$(grep -c '^/' "$fallback_outfile" 2>/dev/null) || found=0
+                success "Gobuster complete (domain fallback) → ${fallback_outfile}"
+                info "Paths found: ${BOLD}${found}${NC}"
+            fi
+        else
+            local found=0
+            found=$(grep -c '^/' "$outfile" 2>/dev/null) || found=0
+            success "Gobuster complete → ${outfile}"
+            info "Paths found: ${BOLD}${found}${NC}"
+        fi
+    done
+}
+
+# ─── Command: subfuzz (wfuzz subdomain fuzzing) ───────────────────────────────
+cmd_subfuzz() {
+    local ip_arg="" name_arg="" wordlist="" domain="" threads=50
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --target)      ip_arg="$2"; name_arg="$3"; shift 3 ;;
+            --wordlist|-w) wordlist="$2"; shift 2 ;;
+            --domain|-d)   domain="$2"; shift 2 ;;
+            --threads|-t)  threads="$2"; shift 2 ;;
+            *)             shift ;;
+        esac
+    done
+
+    require_tool wfuzz
+    resolve_target "$ip_arg" "$name_arg"
+
+    # Domain: argument → machine name + .htb (HTB/THM convention)
+    if [[ -z "$domain" ]]; then
+        domain="${TARGET_NAME}.htb"
+        warn "No domain specified. Using: ${domain}"
+        warn "Use --domain <domain> to specify a different one."
+    fi
+
+    # Wordlist: argument → default
+    if [[ -z "$wordlist" ]]; then
+        wordlist="$DEFAULT_SUB_WORDLIST"
+    fi
+    [[ ! -f "$wordlist" ]] && die "Wordlist not found: ${wordlist}\nSpecify one with --wordlist <path>"
+
+    local content_dir="${WORKSPACE}/content"
+    mkdir -p "$content_dir"
+    local outfile="${content_dir}/subdomains_${domain}.txt"
+
+    section "Subdomain Fuzzing — wfuzz"
+    info "Domain    : ${domain}"
+    info "Target IP : ${TARGET_IP}"
+    info "Wordlist  : ${wordlist}"
+    info "Threads   : ${threads}"
+    info "Output    : ${outfile}"
+
+    # ── Phase 1: Baseline probe ───────────────────────────────────────────────
+    # Run wfuzz against the first 50 words to detect the baseline response
+    # size (chars) that invalid subdomains return. wfuzz output lines look like:
+    #   000000001:   200    9 L    28 W    936 Ch    "randomword"
+    # The most repeated Ch value is the baseline to filter out.
+    info "Detecting baseline response size (probe run)..."
+
+    local probe_wl probe_out
+    probe_wl=$(mktemp)
+    probe_out=$(mktemp)
+    head -50 "$wordlist" > "$probe_wl"
+
+    wfuzz -c \
+        -t "$threads" \
+        -w "$probe_wl" \
+        -H "Host: FUZZ.${domain}" \
+        --hc 404,400 \
+        2>/dev/null | tee "$probe_out" > /dev/null
+
+    # Extract the most repeated chars value from probe results
+    local baseline_chars
+    baseline_chars=$(grep -oP '\d+(?= Ch)' "$probe_out" \
+        | sort | uniq -c | sort -rn | head -1 | awk '{print $2}')
+    rm -f "$probe_wl" "$probe_out"
+
+    # Build the --hh filter flag
+    local hh_flag=()
+    if [[ -n "$baseline_chars" ]]; then
+        success "Baseline response: ${BOLD}${baseline_chars}${NC} chars — will be hidden"
+        hh_flag=(--hh "$baseline_chars")
+    else
+        warn "Could not detect baseline response size. Running without char filter."
+        warn "Results may include false positives."
+    fi
+
+    # ── Phase 2: Full fuzzing run ─────────────────────────────────────────────
+    info "Started   : $(timestamp)"
+    info "Running silently, please wait..."
+
+    wfuzz -c \
+        -t "$threads" \
+        -w "$wordlist" \
+        -H "Host: FUZZ.${domain}" \
+        --hc 404,400 \
+        "${hh_flag[@]}" \
+        -f "${outfile},raw" \
+        "http://${TARGET_IP}/" > /dev/null 2>&1
+
+    local wf_exit=$?
+    if [[ $wf_exit -ne 0 ]]; then
+        error "wfuzz failed (code: ${wf_exit})"
+        return 1
+    fi
+
+    success "Fuzzing complete → ${outfile}"
+
+    # Count result lines (raw format: lines starting with a numeric ID)
+    local found=0
+    found=$(grep -cP '^\d+:' "$outfile" 2>/dev/null) || found=0
+    if [[ "$found" -gt 0 ]]; then
+        success "Subdomains found: ${BOLD}${found}${NC}"
+        # Print a quick summary of discovered subdomains
+        grep -oP '(?<=")[^"]+(?=")' "$outfile" 2>/dev/null \
+            | while read -r sub; do info "  → ${sub}.${domain}"; done
+    else
+        warn "No subdomains found."
+    fi
+}
+
+# ─── Command: enum (full orchestrator) ───────────────────────────────────────
+cmd_enum() {
+    local ip_arg="" name_arg="" do_udp=false
+    local dir_wordlist="" sub_wordlist="" domain=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --target)         ip_arg="$2"; name_arg="$3"; shift 3 ;;
+            --udp)            do_udp=true; shift ;;
+            --wordlist|-w)    dir_wordlist="$2"; shift 2 ;;
+            --sub-wordlist)   sub_wordlist="$2"; shift 2 ;;
+            --domain|-d)      domain="$2"; shift 2 ;;
+            *)                shift ;;
+        esac
+    done
+
+    resolve_target "$ip_arg" "$name_arg"
+
+    # If --target was passed, auto-save config
+    [[ -n "$ip_arg" ]] && save_config "$TARGET_IP" "$TARGET_NAME"
+
+    banner
+    section "Full enumeration of ${BOLD}${TARGET_NAME}${NC} (${TARGET_IP})"
+    info "Workspace : ${WORKSPACE}"
+    info "Started   : $(timestamp)"
+
+    # 1) Create structure if it doesn't exist
+    mkdir -p "${WORKSPACE}/nmap" "${WORKSPACE}/content" "${WORKSPACE}/exploits"
+
+    # 2) Port scan (with optional UDP)
+    local udp_flag=()
+    [[ "$do_udp" == true ]] && udp_flag=(--udp)
+
+    cmd_portscan "${udp_flag[@]}" || {
+        error "Port scan phase failed. Stopping enumeration."
+        return 1
+    }
+
+    # 3) Web scan (if HTTP ports were found)
+    local http_ports
+    http_ports=$(detect_http_ports)
+    if [[ -n "$http_ports" ]]; then
+        local wb_args=()
+        [[ -n "$dir_wordlist" ]] && wb_args+=(--wordlist "$dir_wordlist")
+        cmd_webscan "${wb_args[@]}" || warn "Web scan failed, continuing..."
+
+        # 4) Subdomain fuzzing
+        local sf_args=()
+        [[ -n "$sub_wordlist" ]] && sf_args+=(--wordlist "$sub_wordlist")
+        [[ -n "$domain"       ]] && sf_args+=(--domain "$domain")
+        cmd_subfuzz "${sf_args[@]}" || warn "Subdomain fuzzing failed, continuing..."
+    else
+        info "No HTTP services detected. Skipping webscan and subfuzz."
+    fi
+
+    section "Enumeration finished — $(timestamp)"
+    success "Results saved to: ${BOLD}${WORKSPACE}${NC}"
+    echo ""
+    info "Generated structure:"
+    if command -v tree &>/dev/null; then
+        tree "${WORKSPACE}" --noreport 2>/dev/null | head -30
+    else
+        find "${WORKSPACE}" -maxdepth 2 | sort | sed "s|${WORKSPACE}||; s|^/||; s|[^/]*/|  ├── |g; s|  ├── $||"
+    fi
+}
+
+# ─── Command: status ──────────────────────────────────────────────────────────
+cmd_status() {
+    load_config
+    section "Current status"
+    if [[ -z "$TARGET_IP" ]]; then
+        warn "No target configured. Run 'nmfuzz settarget <ip> <name>'"
+        return
+    fi
+    info "IP        : ${BOLD}${TARGET_IP}${NC}"
+    info "Machine   : ${BOLD}${TARGET_NAME}${NC}"
+    info "Workspace : ${BOLD}${WORKSPACE}${NC}"
+
+    echo ""
+    info "Generated files:"
+    for f in allPorts targeted udp-targeted; do
+        local p="${WORKSPACE}/nmap/${f}"
+        if [[ -f "$p" ]]; then
+            success "  ✓ nmap/${f}"
+        else
+            warn    "  ✗ nmap/${f} (not generated)"
+        fi
+    done
+
+    local http_ports
+    http_ports=$(detect_http_ports 2>/dev/null)
+    if [[ -n "$http_ports" ]]; then
+        info "HTTP ports detected: ${BOLD}${http_ports}${NC}"
+    fi
+}
+
+# ─── Help ─────────────────────────────────────────────────────────────────────
+cmd_help() {
+    banner
+    cat << EOF
+${BOLD}USAGE:${NC}
+  nmfuzz <command> [options]
+
+${BOLD}COMMANDS:${NC}
+
+  ${GREEN}settarget${NC} <ip> <name>
+      Set the target and create the workspace directory structure.
+      Also saves the configuration for subsequent commands.
+
+  ${GREEN}portscan${NC} [--target <ip> <name>] [--udp]
+      Phase 1: Full SYN scan (--min-rate ${NMAP_MIN_RATE}, -n, -Pn)    → allPorts
+      Phase 2: Version detection and scripts (-sCV)              → targeted
+      Phase 3: UDP scan (optional, with --udp)                   → udp-targeted
+
+  ${GREEN}webscan${NC} [--target <ip> <name>] [options]
+      Directory brute-force with gobuster on detected HTTP ports.
+      Options:
+        --wordlist/-w <path>    Custom wordlist
+        --ext/-x <exts>         Extensions (default: php,html,txt,js,bak)
+        --threads/-t <n>        Concurrent threads (default: 50)
+
+  ${GREEN}subfuzz${NC} [--target <ip> <name>] [options]
+      Subdomain fuzzing with wfuzz.
+      Options:
+        --domain/-d <domain>    Base domain (default: <name>.htb)
+        --wordlist/-w <path>    Custom wordlist
+        --threads/-t <n>        Concurrent threads (default: 50)
+
+  ${GREEN}enum${NC} [--target <ip> <name>] [options]
+      Orchestrates the full enumeration pipeline.
+      Options:
+        --udp                   Include UDP scan
+        --wordlist/-w <path>    Wordlist for gobuster
+        --sub-wordlist <path>   Wordlist for wfuzz
+        --domain/-d <domain>    Domain for subdomain fuzzing
+
+  ${GREEN}status${NC}
+      Show the current target and scan file status.
+
+  ${GREEN}help${NC}
+      Show this help message.
+
+${BOLD}EXAMPLES:${NC}
+
+  # Step-by-step workflow:
+  nmfuzz settarget 10.10.11.23 HackMe
+  nmfuzz portscan
+  nmfuzz webscan --wordlist /usr/share/wordlists/dirbuster/common.txt
+  nmfuzz subfuzz --domain hackme.htb
+
+  # Everything in one command:
+  nmfuzz enum --target 10.10.11.23 HackMe --udp --domain hackme.htb
+
+  # Skip settarget and pass the target inline:
+  nmfuzz portscan --target 10.10.11.23 HackMe --udp
+  nmfuzz webscan  --target 10.10.11.23 HackMe -w /opt/SecLists/common.txt
+
+${BOLD}DIRECTORY STRUCTURE:${NC}
+  <name>/
+  ├── nmap/
+  │   ├── allPorts       (SYN scan — grepable)
+  │   ├── targeted       (versions/scripts — nmap)
+  │   └── udp-targeted   (UDP — nmap, if requested)
+  ├── content/
+  │   ├── gobuster_80.txt
+  │   └── subdomains_<domain>.txt
+  └── exploits/
+
+${BOLD}DEFAULT WORDLISTS:${NC}
+  Dir scan    : ${DEFAULT_DIR_WORDLIST}
+  Subdomains  : ${DEFAULT_SUB_WORDLIST}
+
+${BOLD}NOTES:${NC}
+  • portscan and enum require ${RED}root${NC} (nmap SYN scan -sS)
+  • Target configuration is saved to: ${CONFIG_FILE}
+
+EOF
+}
+
+# ─── Dispatcher ───────────────────────────────────────────────────────────────
+main() {
+    [[ $# -eq 0 ]] && { cmd_help; exit 0; }
+
+    local cmd="$1"; shift
+
+    case "$cmd" in
+        settarget)    cmd_settarget "$@" ;;
+        portscan)     cmd_portscan  "$@" ;;
+        webscan)      cmd_webscan   "$@" ;;
+        subfuzz)      cmd_subfuzz   "$@" ;;
+        enum)         cmd_enum      "$@" ;;
+        status)       cmd_status    "$@" ;;
+        help|--help|-h) cmd_help    "$@" ;;
+        *)
+            error "Unknown command: '${cmd}'"
+            echo ""
+            cmd_help
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"
