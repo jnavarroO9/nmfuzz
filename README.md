@@ -7,6 +7,7 @@
   ██║ ╚████║██║ ╚═╝ ██║██║     ╚██████╔╝██████╔╝██████╔╝
   ╚═╝  ╚═══╝╚═╝     ╚═╝╚═╝      ╚═════╝╚═════╝ ╚═════╝
 </pre>
+
 **CTF Enumeration Automation Tool — a bash script that automates port recon (nmap), tcp (SYN scan) and udp ports. Detects http/https services and launches both directory (gobuster) and subdomain (wfuzz) fuzzing.**
 
 ![Bash](https://img.shields.io/badge/bash-5.0%2B-4EAA25?style=flat-square&logo=gnubash&logoColor=white)
