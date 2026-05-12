@@ -1,13 +1,13 @@
 <div align="center">
 
-```
+
   ███╗   ██╗███╗   ███╗███████╗██╗   ██╗███████╗███████╗
   ████╗  ██║████╗ ████║██╔════╝██║   ██║╚════██║╚════██║
   ██╔██╗ ██║██╔████╔██║█████╗  ██║   ██║    ██╔╝    ██╔╝
   ██║╚██╗██║██║╚██╔╝██║██╔══╝  ██║   ██║   ██╔╝    ██╔╝
   ██║ ╚████║██║ ╚═╝ ██║██║     ╚██████╔╝██████╔╝██████╔╝
   ╚═╝  ╚═══╝╚═╝     ╚═╝╚═╝      ╚═════╝╚═════╝ ╚═════╝
-```
+
 
 **CTF Enumeration Automation Tool. A bash script that automates port recon (nmap), tcp (SYN scan) and udp ports. Detects http/https services and launches both directory (gobuster) and subdomain (wfuzz) fuzzing.**
 
@@ -16,10 +16,6 @@
 ![License](https://img.shields.io/badge/license-MIT-orange?style=flat-square)
 
 </div>
-
----
-
-**nmfuzz** is a CTF enumeration automation tool — a bash script that automates port recon (nmap), tcp (SYN scan) and udp ports. Detects http/https services and launches both directory (gobuster) and subdomain (wfuzz) fuzzing.
 
 ---
 
