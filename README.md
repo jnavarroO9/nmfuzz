@@ -1,15 +1,13 @@
 <div align="center">
-
-
+<pre>
   ███╗   ██╗███╗   ███╗███████╗██╗   ██╗███████╗███████╗
   ████╗  ██║████╗ ████║██╔════╝██║   ██║╚════██║╚════██║
   ██╔██╗ ██║██╔████╔██║█████╗  ██║   ██║    ██╔╝    ██╔╝
   ██║╚██╗██║██║╚██╔╝██║██╔══╝  ██║   ██║   ██╔╝    ██╔╝
   ██║ ╚████║██║ ╚═╝ ██║██║     ╚██████╔╝██████╔╝██████╔╝
   ╚═╝  ╚═══╝╚═╝     ╚═╝╚═╝      ╚═════╝╚═════╝ ╚═════╝
-
-
-**CTF Enumeration Automation Tool. A bash script that automates port recon (nmap), tcp (SYN scan) and udp ports. Detects http/https services and launches both directory (gobuster) and subdomain (wfuzz) fuzzing.**
+</pre>
+**CTF Enumeration Automation Tool — a bash script that automates port recon (nmap), tcp (SYN scan) and udp ports. Detects http/https services and launches both directory (gobuster) and subdomain (wfuzz) fuzzing.**
 
 ![Bash](https://img.shields.io/badge/bash-5.0%2B-4EAA25?style=flat-square&logo=gnubash&logoColor=white)
 ![Platform](https://img.shields.io/badge/platform-Linux-blue?style=flat-square&logo=linux&logoColor=white)
