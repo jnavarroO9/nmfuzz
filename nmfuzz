@@ -148,7 +148,7 @@ cmd_portscan() {
     section "Phase 1 — SYN Scan (all ports)"
     local allports="${nmap_dir}/allPorts"
     info "Target    : ${TARGET_IP} (${TARGET_NAME})"
-    info "Output    : ${allports}.gnmap"
+    info "Output    : ${allports}"
     info "Started   : $(timestamp)"
 
     nmap -sS -p- \
@@ -179,7 +179,7 @@ cmd_portscan() {
     section "Phase 2 — Version detection and recon scripts (-sCV)"
     local targeted="${nmap_dir}/targeted"
     info "Ports     : ${open_ports}"
-    info "Output    : ${targeted}.nmap"
+    info "Output    : ${targeted}"
     info "Started   : $(timestamp)"
 
     nmap -sCV \
@@ -201,7 +201,7 @@ cmd_portscan() {
     if [[ "$do_udp" == true ]]; then
         section "Phase 3 — UDP Scan (top 200 ports)"
         local udp_targeted="${nmap_dir}/udp-targeted"
-        info "Output    : ${udp_targeted}.nmap"
+        info "Output    : ${udp_targeted}"
         info "Started   : $(timestamp)"
         warn "UDP scan may take several minutes..."
 
