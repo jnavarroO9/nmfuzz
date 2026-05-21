@@ -133,7 +133,8 @@ cmd_portscan() {
         case "$1" in
             --target)    ip_arg="$2"; name_arg="$3"; shift 3 ;;
             --udp)       do_udp=true; shift ;;
-            *)           shift ;;
+            -*)          die "Unknown option for portscan: '$1'. See nmfuzz help." ;;
+            *)           die "Unexpected argument for portscan: '$1'. See nmfuzz help." ;;
         esac
     done
 
@@ -255,7 +256,8 @@ cmd_webscan() {
             --wordlist|-w) wordlist="$2"; shift 2 ;;
             --ext|-x)      extensions="$2"; shift 2 ;;
             --threads|-t)  threads="$2"; shift 2 ;;
-            *)             shift ;;
+            -*)            die "Unknown option for webscan: '$1'. See nmfuzz help." ;;
+            *)             die "Unexpected argument for webscan: '$1'. See nmfuzz help." ;;
         esac
     done
 
@@ -355,7 +357,8 @@ cmd_subfuzz() {
             --wordlist|-w) wordlist="$2"; shift 2 ;;
             --domain|-d)   domain="$2"; shift 2 ;;
             --threads|-t)  threads="$2"; shift 2 ;;
-            *)             shift ;;
+            -*)            die "Unknown option for subfuzz: '$1'. See nmfuzz help." ;;
+            *)             die "Unexpected argument for subfuzz: '$1'. See nmfuzz help." ;;
         esac
     done
 
@@ -468,7 +471,8 @@ cmd_enum() {
             --wordlist|-w)    dir_wordlist="$2"; shift 2 ;;
             --sub-wordlist)   sub_wordlist="$2"; shift 2 ;;
             --domain|-d)      domain="$2"; shift 2 ;;
-            *)                shift ;;
+            -*)               die "Unknown option for enum: '$1'. See nmfuzz help." ;;
+            *)                die "Unexpected argument for enum: '$1'. See nmfuzz help." ;;
         esac
     done
 
