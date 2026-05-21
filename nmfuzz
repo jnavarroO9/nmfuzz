@@ -2,7 +2,7 @@
 # =============================================================================
 #  nmfuzz — CTF Lab Enumeration Automation
 #  Usage:  nmfuzz <command> [options]
-#  Author: jNavarroO9
+#  Author: jnavarroO9
 # =============================================================================
 
 # ─── Colors ──────────────────────────────────────────────────────────────────
@@ -184,6 +184,7 @@ cmd_portscan() {
 
     nmap -sCV \
         -p "${open_ports}" \
+        -n -Pn \
         -oN "${targeted}" \
         "${TARGET_IP}" 2>&1
 
@@ -206,6 +207,7 @@ cmd_portscan() {
 
         nmap -sU \
             --top-ports 200 \
+            -n -Pn \
             -oN "${udp_targeted}" \
             "${TARGET_IP}" 2>&1
 
@@ -401,6 +403,7 @@ cmd_subfuzz() {
         -w "$probe_wl" \
         -H "Host: FUZZ.${domain}" \
         --hc 404,400 \
+        "http://${TARGET_IP}/" \
         2>/dev/null | tee "$probe_out" > /dev/null
 
     # Extract the most repeated chars value from probe results

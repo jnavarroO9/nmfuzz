@@ -62,7 +62,7 @@ git clone https://github.com/danielmiessler/SecLists /usr/share/wordlists/SecLis
 ## Installation
 
 ```bash
-git clone https://github.com/jNavarroO9/nmfuzz.git
+git clone https://github.com/jnavarroO9/nmfuzz.git
 cd nmfuzz
 chmod +x nmfuzz.sh
 sudo mv nmfuzz.sh /usr/local/bin/nmfuzz
